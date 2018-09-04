@@ -1,0 +1,83 @@
+jobs:
+- name: build
+  plan:
+  - aggregate:
+    - get: release
+      trigger: true
+      params:
+        globs: [none]
+    - get: source-code
+  - task: build
+    config:
+      platform: linux
+      image_resource:
+        type: docker-image
+        source:
+          repository: golang
+          tag: latest
+      inputs:
+      - name: release
+      - name: source-code
+        path: src/code.cloudfoundry.org/cli
+      outputs:
+      - name: artifacts
+      run:
+        path: bash
+        args:
+        - -exc
+        - |
+          target=$PWD/artifacts
+          tag=$(cat release/tag)
+          export GOPATH=$PWD
+          cd $GOPATH/src/code.cloudfoundry.org/cli
+
+          git checkout $tag
+
+          GOARCH=arm64 make build
+          cp out/cf $target/cf-arm64
+          make clean
+
+          for GOARM in 5 6 7; do
+            GOARCH=arm make build
+            cp out/cf $target/cf-arm${GOARM}
+            make clean
+          done
+
+          for file in $(grep '/etc/resolv.conf' /usr/local/go/src/net/* -l 2> /dev/null); do
+            sed -i $file -es'^/etc/resolv.conf^/data/data/com.termux/files/usr/etc/resolv.conf^'
+          done
+          
+          GOARCH=arm64 make build
+          cp out/cf $target/cf-arm64-termux
+          make clean
+
+          for GOARM in 5 6 7; do
+            GOARCH=arm make build
+            cp out/cf $target/cf-arm${GOARM}-termux
+            make clean
+          done
+
+  - put: cf-cli-release
+    params:
+      name: release/tag
+      tag: release/tag
+      globs:
+      - artifacts/*
+
+resources:
+- name: release
+  type: github-release
+  source:
+    owner: cloudfoundry
+    repository: cli
+    access_token: ((github_access_token))
+- name: source-code
+  type: git
+  source:
+    uri: https://github.com/cloudfoundry/cli.git
+- name: cf-cli-release
+  type: github-release
+  source:
+    owner: timotto
+    repository: cf-cli-arm
+    access_token: ((github_access_token))
